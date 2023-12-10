@@ -1,4 +1,7 @@
+#include <stdlib.h>
+
 #include <OLED_I2C.h> 
+#include <AnalogKeypad.h>
 #include <DHT.h>
 
 #define ZUMMER 3
@@ -12,6 +15,11 @@
 OLED  myOLED(A2, A3, A2);      
 DHT dht(11, DHT11);  
 
+const int KeypadMap[] = {0, 32, 88, 166, 352, 1022};
+const uint16_t KeypadHoldTimeMs = 5000;
+const uint8_t KeypadAnalogPin = A0;
+AnalogKeypad keypad(KeypadAnalogPin, KeypadMap, countof(KeypadMap), KeypadHoldTimeMs);
+
 extern uint8_t RusFont[]; 
 extern uint8_t SmallFont[]; 
 unsigned long timing1; 
@@ -23,6 +31,22 @@ int vibrcheck = 0;
 
 int prev_temp = 0;
 int prev_hum = 0;
+
+bool is_submenu = false;
+bool is_settings_changed = false;
+int current_setting = 0;
+int min_temp = 18;
+int max_temp = 22;
+int min_hum = 40;
+int max_hum = 70;
+int is_sound = 0;
+int min_temp_limit = -10;
+int max_temp_limit = 50;
+int min_hum_limit = 0;
+int max_hum_limit = 100;
+int sound_limit_left = 0;
+int sound_limit_right = 1;
+
 
 enum Stages {
   TEMP_HUM,
@@ -37,6 +61,21 @@ menu_t menu[] = {
   {TEMP_HUM, "Temp and Humidity"},
   {VIBRATION, "Vibration"},
   {MOVEMENT, "Movement"},
+};
+
+typedef struct {
+  int index;
+  const char* str;
+  int* value;
+  int* limit_left;
+  int* limit_right;
+} settings_t;
+settings_t settings[] = {
+  {1, "Min temp", &min_temp, &min_temp_limit, &max_temp},
+  {2, "Max temp", &max_temp, &min_temp, &max_temp_limit},
+  {3, "Min humidity", &min_hum, &min_hum_limit, &max_hum},
+  {4, "Max humidity", &max_hum, &min_hum, &max_hum_limit},
+  {5, "Sound", &is_sound, &sound_limit_left, &sound_limit_right},
 };
 
 
@@ -55,10 +94,6 @@ void setup() {
   pinMode(MOVE, INPUT); 
   pinMode(VIBR, INPUT);
   pinMode(ZUMMER, OUTPUT); 
-
-  tone(ZUMMER, 1000); 
-  delay(1000);   
-  noTone(ZUMMER); 
 
   turnOffBulb();
   for(int i=0; i<3; i++){
@@ -88,6 +123,15 @@ void TempHumInfo(int i){
     prev_temp = intTemp;
     prev_hum = intHum;
   }
+
+  if (is_sound){
+    if (intTemp < min_temp || intTemp > max_temp || intHum < min_hum || intHum > max_hum) {
+      tone(ZUMMER, 1000); 
+    } else {
+      noTone(ZUMMER); 
+    }
+  }
+  
 }
 
 void VibrInfo(int i){
@@ -107,8 +151,12 @@ void MoveInfo(int i){
   if(movecheck){
     digitalWrite(LEDRED, LOW);
     digitalWrite(LEDBLUE, LOW);
+    if (is_sound){
+      tone(ZUMMER, 1000); 
+    }
   }
   else{
+    noTone(ZUMMER); 
     turnOffBulb();
   }
 }
@@ -122,6 +170,7 @@ void screenStageSetup(int i){
 void closeStage(){
   myOLED.clrScr();
   myOLED.update();
+  noTone(ZUMMER);
   turnOffBulb();
   movecheck = 0;
   vibrcheck = 0;
@@ -129,9 +178,52 @@ void closeStage(){
   prev_hum = 0;
 }
 
+void ButtonHandler(const ButtonParam& param) {
+  // param.button
+  // 4 separate
+  // 3 right
+  // 2 down
+  // 1 up
+  // 0 left
+  if (param.state == ButtonState_Click) {
+    if (is_submenu){
+      switch(param.button) {
+        case 0:
+          if (*(settings[current_setting].value) > *(settings[current_setting].limit_left))
+            *(settings[current_setting].value) -= 1;
+          is_settings_changed = true;
+          break;
+        case 1:
+          current_setting = (current_setting == 0 ? 0 : current_setting -= 1);
+          is_settings_changed = true;
+          break;
+        case 2:
+          current_setting = (current_setting == sizeof(settings)/sizeof(settings_t) - 1 ? sizeof(settings)/sizeof(settings_t) - 1 : current_setting += 1);
+          is_settings_changed = true;
+          break;
+        case 3:
+          if (*(settings[current_setting].value) < *(settings[current_setting].limit_right))
+            *(settings[current_setting].value) += 1;
+          is_settings_changed = true;
+          break;
+        case 4:
+          is_submenu = false;
+          break;
+      }
+    } else {
+      if (param.button == 4) {
+        closeStage();
+        is_submenu = true;
+        is_settings_changed = true;
+      }
+    }
+   
+  }
+
+}
+
 int i = 0;
-void loop()
-{
+void main_menu(){
   buttonState = digitalRead(BUTTON); 
   if(buttonState) 
   {
@@ -161,41 +253,38 @@ void loop()
 }
 
 
+void print_submenu(){
+  myOLED.clrScr();
+  char value[7];
+  char text[50];
+  for(int i = 0; i < sizeof(settings)/sizeof(settings_t); i++) {
+    if(i == current_setting) {
+      strcpy(text, "> "); 
+    } else {
+      strcpy(text, "  ");
+    }
+    itoa(*(settings[i].value), value, 10);
+    strcat(text, settings[i].str);
+    strcat(text, ": ");
+    strcat(text, value);
+    myOLED.print(text, 3, i * 10); 
+    memset(text, '\0', sizeof(text));
+  }
+  myOLED.update();
+}
 
-  // delay(2000);
-  // // белый
-  // digitalWrite(LEDRED, LOW); 
-  // digitalWrite(LEDGREEN, LOW);
-  // digitalWrite(LEDBLUE, LOW);
-  // delay(2000);
-  // // красный
-  // digitalWrite(LEDRED, LOW); 
-  // digitalWrite(LEDGREEN, HIGH);
-  // digitalWrite(LEDBLUE, HIGH);
-  // delay(2000);
-  // // зеленый
-  // digitalWrite(LEDRED, HIGH);
-  // digitalWrite(LEDGREEN, LOW);
-  // digitalWrite(LEDBLUE, HIGH);
-  // delay(2000);
-  // // синий
-  // digitalWrite(LEDRED, HIGH);
-  // digitalWrite(LEDGREEN, HIGH);
-  // digitalWrite(LEDBLUE, LOW);
-  // delay(2000);
-  // // желтый
-  // digitalWrite(LEDRED, LOW); 
-  // digitalWrite(LEDGREEN, LOW);
-  // digitalWrite(LEDBLUE, HIGH);
-  // delay(2000);
-  // // голубой
-  // digitalWrite(LEDRED, HIGH);
-  // digitalWrite(LEDGREEN, LOW);
-  // digitalWrite(LEDBLUE, LOW);
-  // delay(2000);
-  // розовый
-  // digitalWrite(LEDRED, LOW);
-  // digitalWrite(LEDGREEN, HIGH);
-  // digitalWrite(LEDBLUE, LOW);
-  // delay(2000);
+void submenu(){
+  if (is_settings_changed){
+    print_submenu();
+    is_settings_changed = false;
+  }
+}
 
+
+void loop()
+{
+  keypad.loop(ButtonHandler);
+
+  if (is_submenu) submenu();
+  else main_menu();
+}
